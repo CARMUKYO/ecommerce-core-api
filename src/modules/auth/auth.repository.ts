@@ -33,6 +33,15 @@ export class AuthRepository {
     return row;
   }
 
+  /** Deletes up to `limit` expired sessions (by DB clock); returns how many. */
+  async deleteExpiredSessions(executor: DbExecutor, limit: number): Promise<number> {
+    const result = await executor.execute(
+      sql`DELETE FROM sessions
+          WHERE id IN (SELECT id FROM sessions WHERE expires_at <= now() ORDER BY expires_at LIMIT ${limit})`,
+    );
+    return result.rowCount ?? 0;
+  }
+
   async deleteSession(executor: DbExecutor, sessionId: string): Promise<void> {
     await executor.delete(sessions).where(eq(sessions.id, sessionId));
   }

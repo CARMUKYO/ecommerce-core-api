@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, sql, type SQL } from "drizzle-orm";
 import type { DbExecutor } from "../../db/client.js";
 import { inventory, type Inventory } from "../../db/schema/inventory.js";
 import { products, type NewProduct, type Product } from "../../db/schema/products.js";
@@ -57,16 +57,31 @@ export class ProductRepository {
       .limit(opts.limit)
       .offset(opts.offset);
 
-    // Simple count query for pagination
-    const countRows = await executor
-      .select({ id: products.id })
-      .from(products)
-      .where(whereClause);
+    const [countRow] = await executor.select({ total: count() }).from(products).where(whereClause);
 
     return {
       items: rows.map((r) => ({ product: r.product, inventory: r.inventory })),
-      total: countRows.length,
+      total: countRow?.total ?? 0,
     };
+  }
+
+  /** Exclusive row lock for read-check-write edits (serializes with status changes). */
+  async lockProductForUpdate(executor: DbExecutor, id: string): Promise<Product | undefined> {
+    const [row] = await executor.select().from(products).where(eq(products.id, id)).for("update");
+    return row;
+  }
+
+  /**
+   * Shared locks on the products being purchased: concurrent checkouts don't
+   * block each other, but an archive or price edit waits until checkout commits.
+   * Lock order: cart -> products -> inventory. Ids must be sorted.
+   */
+  async lockProductsForShare(executor: DbExecutor, sortedIds: string[]): Promise<void> {
+    if (sortedIds.length === 0) return;
+    await executor.execute(
+      sql`SELECT id FROM products WHERE id IN (${sql.join(sortedIds.map((id) => sql`${id}`), sql`, `)})
+          ORDER BY id FOR SHARE`,
+    );
   }
 
   async updateProduct(executor: DbExecutor, id: string, data: Partial<NewProduct>): Promise<Product | undefined> {
@@ -74,19 +89,6 @@ export class ProductRepository {
     return row;
   }
 
-  async compareAndSetStatus(
-    executor: DbExecutor,
-    id: string,
-    allowedFrom: readonly ProductStatus[],
-    to: ProductStatus,
-  ): Promise<Product | undefined> {
-    const [row] = await executor
-      .update(products)
-      .set({ status: to })
-      .where(and(eq(products.id, id), inArray(products.status, allowedFrom as ProductStatus[])))
-      .returning();
-    return row;
-  }
 }
 
 export const productRepository = new ProductRepository();

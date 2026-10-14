@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { count, desc, eq, sql } from "drizzle-orm";
 import type { DbExecutor } from "../../db/client.js";
 import {
   inventory,
@@ -86,18 +86,19 @@ export class InventoryRepository {
       .select()
       .from(inventoryMovements)
       .where(eq(inventoryMovements.productId, productId))
-      .orderBy(desc(inventoryMovements.createdAt))
+      // Movements written in one transaction share created_at; id keeps pages stable.
+      .orderBy(desc(inventoryMovements.createdAt), desc(inventoryMovements.id))
       .limit(opts.limit)
       .offset(opts.offset);
 
-    const countRows = await executor
-      .select({ id: inventoryMovements.id })
+    const [countRow] = await executor
+      .select({ total: count() })
       .from(inventoryMovements)
       .where(eq(inventoryMovements.productId, productId));
 
     return {
       items: rows,
-      total: countRows.length,
+      total: countRow?.total ?? 0,
     };
   }
 }

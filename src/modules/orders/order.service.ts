@@ -6,6 +6,7 @@ import type { User } from "../../db/schema/users.js";
 import { AppError, ErrorCodes } from "../../http/errors.js";
 import { cartRepository, type CartItemDetailed } from "../cart/cart.repository.js";
 import { inventoryRepository } from "../inventory/inventory.repository.js";
+import { productRepository } from "../products/product.repository.js";
 import { canTransitionOrderStatus, getAllowedOrderStatusTargets, type OrderStatus } from "./order-status.js";
 import { orderRepository, type OrderWithItems } from "./order.repository.js";
 
@@ -132,9 +133,9 @@ export class OrderService {
           });
         }
 
-        // Read lines only under the lock so the order matches the cart exactly.
-        const lines = await cartRepository.findCartItemsWithDetails(tx, cart.id);
-        if (lines.length === 0) {
+        // Cart items are stable now that we hold the cart lock.
+        const cartLines = await cartRepository.findCartItemsWithDetails(tx, cart.id);
+        if (cartLines.length === 0) {
           throw new AppError({
             statusCode: 400,
             code: ErrorCodes.CART_EMPTY,
@@ -142,13 +143,18 @@ export class OrderService {
           });
         }
 
-        const fingerprint = computeFingerprint(lines);
-
         // 4. Deterministic deadlock-free sorting of product IDs
-        const sortedProductIds = Array.from(new Set(lines.map((l) => l.item.productId))).sort();
+        const sortedProductIds = Array.from(new Set(cartLines.map((l) => l.item.productId))).sort();
 
-        // 5. Acquire FOR UPDATE exclusive locks on inventory rows in sorted order
+        // 5. Lock in global order cart -> products -> inventory. The shared
+        // product locks stop an archive or price edit from landing mid-checkout.
+        await productRepository.lockProductsForShare(tx, sortedProductIds);
         const inventoryMap = await orderRepository.lockInventoryRows(tx, sortedProductIds);
+
+        // Re-read under the product locks so status and price are current and
+        // can no longer change before commit (READ COMMITTED: new statement).
+        const lines = await cartRepository.findCartItemsWithDetails(tx, cart.id);
+        const fingerprint = computeFingerprint(lines);
 
         // 6. Verify product availability and live status
         for (const line of lines) {

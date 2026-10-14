@@ -122,6 +122,18 @@ export function registerErrorHandler(app: FastifyInstance): void {
         return reply.status(409).send(envelope);
       }
 
+      // lock_timeout / statement_timeout: transient contention, safe to retry.
+      if (pgErr.code === PgErrorCodes.LOCK_NOT_AVAILABLE || pgErr.code === PgErrorCodes.QUERY_CANCELED) {
+        request.log.warn({ err: error }, "database timeout");
+        const envelope: ErrorEnvelope = {
+          error: {
+            code: ErrorCodes.SERVICE_BUSY,
+            message: "The service is busy; please retry shortly",
+          },
+        };
+        return reply.status(503).header("retry-after", "1").send(envelope);
+      }
+
       if (pgErr.code === PgErrorCodes.NUMERIC_OUT_OF_RANGE) {
         const envelope: ErrorEnvelope = {
           error: {

@@ -47,8 +47,14 @@ export const ErrorCodes = {
   STOCK_LIMIT_EXCEEDED: "STOCK_LIMIT_EXCEEDED",
   IDEMPOTENCY_KEY_REUSED: "IDEMPOTENCY_KEY_REUSED",
 
+  // 429 Too Many Requests
+  RATE_LIMITED: "RATE_LIMITED",
+
   // 500 Internal Server Error
   INTERNAL_ERROR: "INTERNAL_ERROR",
+
+  // 503 Service Unavailable
+  SERVICE_BUSY: "SERVICE_BUSY",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

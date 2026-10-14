@@ -9,6 +9,27 @@ const EnvSchema = z.object({
   CART_MAX_LINE_QUANTITY: z.coerce.number().int().min(1).max(999).default(99),
   // Absolute session lifetime. Default 7 days.
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 90).default(168),
+  // Unpaid PENDING orders are auto-cancelled (stock released) after this long.
+  PENDING_ORDER_TTL_MINUTES: z.coerce.number().int().min(1).max(60 * 24 * 7).default(30),
+  // Background jobs (expiry sweepers). Never started by tests' buildApp().
+  JOBS_ENABLED: z.stringbool().default(true),
+
+  // Rate limiting. Defaults to on, except under NODE_ENV=test.
+  RATE_LIMIT_ENABLED: z.stringbool().optional(),
+  RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(100),
+  // Only trust X-Forwarded-For when actually behind a reverse proxy, or every
+  // client could spoof its IP and dodge per-IP limits.
+  TRUST_PROXY: z.stringbool().default(false),
+  // Comma-separated browser origins allowed via CORS. Empty = no cross-origin access.
+  CORS_ORIGINS: z
+    .string()
+    .default("")
+    .transform((v) => v.split(",").map((o) => o.trim()).filter(Boolean)),
+
+  // Postgres guards: no request may hold a connection or lock indefinitely.
+  DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).default(10_000),
+  DB_LOCK_TIMEOUT_MS: z.coerce.number().int().min(100).default(5_000),
+  DB_IDLE_TX_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(30_000),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

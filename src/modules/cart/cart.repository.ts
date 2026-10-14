@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, count, eq, sql } from "drizzle-orm";
 import type { DbExecutor } from "../../db/client.js";
 import { cartItems, carts, type Cart, type CartItem } from "../../db/schema/carts.js";
 import { inventory, type Inventory } from "../../db/schema/inventory.js";
@@ -97,11 +97,8 @@ export class CartRepository {
   }
 
   async countCartItems(executor: DbExecutor, cartId: string): Promise<number> {
-    const rows = await executor
-      .select({ id: cartItems.id })
-      .from(cartItems)
-      .where(eq(cartItems.cartId, cartId));
-    return rows.length;
+    const [row] = await executor.select({ total: count() }).from(cartItems).where(eq(cartItems.cartId, cartId));
+    return row?.total ?? 0;
   }
 
   /**

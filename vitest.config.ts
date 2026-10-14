@@ -3,7 +3,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    env: { NODE_ENV: "test" },
+    // Shorter lock timeout keeps the 503 SERVICE_BUSY test fast; race tests hold locks < 1s.
+    env: { NODE_ENV: "test", DB_LOCK_TIMEOUT_MS: "2000" },
     include: ["tests/**/*.test.ts"],
     setupFiles: ["tests/setup.ts"],
     // All integration tests share one real Postgres database; run files

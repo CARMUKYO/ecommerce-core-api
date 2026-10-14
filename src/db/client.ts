@@ -11,7 +11,15 @@ pg.types.setTypeParser(20, (value) => {
   return n;
 });
 
-export const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 20 });
+export const pool = new pg.Pool({
+  connectionString: env.DATABASE_URL,
+  max: 20,
+  connectionTimeoutMillis: 5_000,
+  // Server-side guards (SQLSTATE 57014 / 55P03 are mapped to 503 SERVICE_BUSY).
+  statement_timeout: env.DB_STATEMENT_TIMEOUT_MS,
+  lock_timeout: env.DB_LOCK_TIMEOUT_MS,
+  idle_in_transaction_session_timeout: env.DB_IDLE_TX_TIMEOUT_MS,
+});
 
 export type Database = NodePgDatabase<typeof schema>;
 export const db: Database = drizzle(pool, { schema, casing: "snake_case" });

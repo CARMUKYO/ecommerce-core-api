@@ -97,6 +97,19 @@ export class AuthService {
     return { user: found.user, sessionId: found.session.id };
   }
 
+  /**
+   * Background job: purge expired sessions in small batches so no single
+   * DELETE holds locks on a large part of the table.
+   */
+  async purgeExpiredSessions(batchSize = 1_000): Promise<number> {
+    let total = 0;
+    for (;;) {
+      const deleted = await authRepository.deleteExpiredSessions(db, batchSize);
+      total += deleted;
+      if (deleted < batchSize) return total;
+    }
+  }
+
   /** Idempotent: revoking an already-deleted session is a no-op. */
   async logout(sessionId: string): Promise<void> {
     await authRepository.deleteSession(db, sessionId);

@@ -1,5 +1,6 @@
 import { db } from "../../db/client.js";
 import { isUniqueViolation } from "../../db/pg-errors.js";
+import type { Product } from "../../db/schema/products.js";
 import type { User } from "../../db/schema/users.js";
 import { AppError, ErrorCodes } from "../../http/errors.js";
 import { inventoryRepository } from "../inventory/inventory.repository.js";
@@ -157,53 +158,57 @@ export class ProductService {
   }
 
   async updateProduct(actor: User, id: string, input: UpdateProductInput): Promise<FormattedProduct> {
-    const existing = await productRepository.findProductById(db, id);
-    if (!existing) {
-      throw new AppError({
-        statusCode: 404,
-        code: ErrorCodes.PRODUCT_NOT_FOUND,
-        message: `Product with ID '${id}' was not found`,
-      });
-    }
-
-    if (existing.status === "ARCHIVED") {
-      throw new AppError({
-        statusCode: 409,
-        code: ErrorCodes.PRODUCT_NOT_EDITABLE,
-        message: "Cannot edit an archived product",
-      });
-    }
-
-    let normalizedSku: string | undefined;
-    if (input.sku !== undefined) {
-      normalizedSku = input.sku.trim().toUpperCase();
-      if (existing.status !== "DRAFT" && normalizedSku !== existing.sku) {
-        throw new AppError({
-          statusCode: 409,
-          code: ErrorCodes.SKU_IMMUTABLE,
-          message: "SKU cannot be modified once a product has left DRAFT status",
-          details: { currentSku: existing.sku, attemptedSku: normalizedSku },
-        });
-      }
-    }
-
-    if (existing.status === "ACTIVE" && input.priceCents !== undefined && input.priceCents <= 0) {
-      throw new AppError({
-        statusCode: 422,
-        code: ErrorCodes.PRODUCT_NOT_ACTIVATABLE,
-        message: "Active products must have a price greater than 0 cents",
-        details: { violations: ["PRICE_MUST_BE_GREATER_THAN_ZERO"] },
-      });
-    }
-
-    const updates: Record<string, unknown> = {};
-    if (input.name !== undefined) updates["name"] = input.name.trim();
-    if (input.description !== undefined) updates["description"] = input.description;
-    if (input.priceCents !== undefined) updates["priceCents"] = input.priceCents;
-    if (normalizedSku !== undefined) updates["sku"] = normalizedSku;
+    const normalizedSku = input.sku?.trim().toUpperCase();
 
     try {
-      await productRepository.updateProduct(db, id, updates);
+      await db.transaction(async (tx) => {
+        // Lock the row so the status checks below hold until our UPDATE commits
+        // (an activate/archive cannot slip in between check and write).
+        const existing = await productRepository.lockProductForUpdate(tx, id);
+        if (!existing) {
+          throw new AppError({
+            statusCode: 404,
+            code: ErrorCodes.PRODUCT_NOT_FOUND,
+            message: `Product with ID '${id}' was not found`,
+          });
+        }
+
+        if (existing.status === "ARCHIVED") {
+          throw new AppError({
+            statusCode: 409,
+            code: ErrorCodes.PRODUCT_NOT_EDITABLE,
+            message: "Cannot edit an archived product",
+          });
+        }
+
+        if (normalizedSku !== undefined) {
+          if (existing.status !== "DRAFT" && normalizedSku !== existing.sku) {
+            throw new AppError({
+              statusCode: 409,
+              code: ErrorCodes.SKU_IMMUTABLE,
+              message: "SKU cannot be modified once a product has left DRAFT status",
+              details: { currentSku: existing.sku, attemptedSku: normalizedSku },
+            });
+          }
+        }
+
+        if (existing.status === "ACTIVE" && input.priceCents !== undefined && input.priceCents <= 0) {
+          throw new AppError({
+            statusCode: 422,
+            code: ErrorCodes.PRODUCT_NOT_ACTIVATABLE,
+            message: "Active products must have a price greater than 0 cents",
+            details: { violations: ["PRICE_MUST_BE_GREATER_THAN_ZERO"] },
+          });
+        }
+
+        const updates: Record<string, unknown> = {};
+        if (input.name !== undefined) updates["name"] = input.name.trim();
+        if (input.description !== undefined) updates["description"] = input.description;
+        if (input.priceCents !== undefined) updates["priceCents"] = input.priceCents;
+        if (normalizedSku !== undefined) updates["sku"] = normalizedSku;
+
+        await productRepository.updateProduct(tx, id, updates);
+      });
     } catch (err: unknown) {
       if (isUniqueViolation(err, "products_sku_key")) {
         throw new AppError({
@@ -221,68 +226,39 @@ export class ProductService {
   }
 
   async activateProduct(_actor: User, id: string): Promise<FormattedProduct> {
-    const existing = await productRepository.findProductByIdWithInventory(db, id);
-    if (!existing) {
-      throw new AppError({
-        statusCode: 404,
-        code: ErrorCodes.PRODUCT_NOT_FOUND,
-        message: `Product with ID '${id}' was not found`,
-      });
-    }
-
-    if (existing.product.status === "ACTIVE") {
-      // Idempotent no-op
-      return formatProductResponse(existing);
-    }
-
-    if (!canTransitionProductStatus(existing.product.status, "ACTIVE")) {
-      throw new AppError({
-        statusCode: 409,
-        code: ErrorCodes.INVALID_PRODUCT_STATUS_TRANSITION,
-        message: `Cannot transition product from '${existing.product.status}' to 'ACTIVE'`,
-        details: {
-          from: existing.product.status,
-          to: "ACTIVE",
-          allowedTargets: getAllowedProductStatusTargets(existing.product.status),
-        },
-      });
-    }
-
-    if (existing.product.priceCents <= 0) {
-      throw new AppError({
-        statusCode: 422,
-        code: ErrorCodes.PRODUCT_NOT_ACTIVATABLE,
-        message: "Product must have a price greater than 0 before activation",
-        details: { violations: ["PRICE_MUST_BE_GREATER_THAN_ZERO"] },
-      });
-    }
-
-    // Atomic compare-and-set: ensure status hasn't changed since we inspected it
-    const allowedSources = [existing.product.status] as const;
-    const updated = await productRepository.compareAndSetStatus(db, id, allowedSources, "ACTIVE");
-
-    if (!updated) {
-      // Transition raced with another update
-      const reFetched = await productRepository.findProductById(db, id);
-      throw new AppError({
-        statusCode: 409,
-        code: ErrorCodes.INVALID_PRODUCT_STATUS_TRANSITION,
-        message: `Cannot transition product from '${reFetched?.status}' to 'ACTIVE'`,
-        details: {
-          from: reFetched?.status,
-          to: "ACTIVE",
-          allowedTargets: reFetched ? getAllowedProductStatusTargets(reFetched.status) : [],
-        },
-      });
-    }
-
-    const result = await productRepository.findProductByIdWithInventory(db, id);
-    return formatProductResponse(result!);
+    return await this.transitionStatus(id, "ACTIVE", (product) => {
+      if (product.priceCents <= 0) {
+        throw new AppError({
+          statusCode: 422,
+          code: ErrorCodes.PRODUCT_NOT_ACTIVATABLE,
+          message: "Product must have a price greater than 0 before activation",
+          details: { violations: ["PRICE_MUST_BE_GREATER_THAN_ZERO"] },
+        });
+      }
+    });
   }
 
   async archiveProduct(_actor: User, id: string): Promise<FormattedProduct> {
-    const existing = await productRepository.findProductByIdWithInventory(db, id);
-    if (!existing) {
+    return await this.transitionStatus(id, "ARCHIVED");
+  }
+
+  /**
+   * Status change under an exclusive row lock, so preconditions (e.g. price > 0)
+   * are checked against the same row state the update applies to. Repeating the
+   * current status is an idempotent no-op.
+   *
+   * Contract preserved from the original compare-and-set: the transition acts on
+   * the status the request *observed*. If a concurrent command changed it while
+   * we waited for the lock, we fail with 409 instead of applying our transition
+   * to a state the caller never saw.
+   */
+  private async transitionStatus(
+    id: string,
+    to: ProductStatus,
+    precondition?: (product: Product) => void,
+  ): Promise<FormattedProduct> {
+    const observed = await productRepository.findProductById(db, id);
+    if (!observed) {
       throw new AppError({
         statusCode: 404,
         code: ErrorCodes.PRODUCT_NOT_FOUND,
@@ -290,41 +266,37 @@ export class ProductService {
       });
     }
 
-    if (existing.product.status === "ARCHIVED") {
-      // Idempotent no-op
-      return formatProductResponse(existing);
-    }
+    await db.transaction(async (tx) => {
+      const product = await productRepository.lockProductForUpdate(tx, id);
+      if (!product) {
+        throw new AppError({
+          statusCode: 404,
+          code: ErrorCodes.PRODUCT_NOT_FOUND,
+          message: `Product with ID '${id}' was not found`,
+        });
+      }
+      if (product.status === to && observed.status === to) return;
 
-    if (!canTransitionProductStatus(existing.product.status, "ARCHIVED")) {
-      throw new AppError({
-        statusCode: 409,
-        code: ErrorCodes.INVALID_PRODUCT_STATUS_TRANSITION,
-        message: `Cannot transition product from '${existing.product.status}' to 'ARCHIVED'`,
-        details: {
-          from: existing.product.status,
-          to: "ARCHIVED",
-          allowedTargets: getAllowedProductStatusTargets(existing.product.status),
-        },
-      });
-    }
+      if (product.status !== observed.status) {
+        throw new AppError({
+          statusCode: 409,
+          code: ErrorCodes.INVALID_PRODUCT_STATUS_TRANSITION,
+          message: `Cannot transition product from '${product.status}' to '${to}'; it changed concurrently`,
+          details: { from: product.status, to, allowedTargets: getAllowedProductStatusTargets(product.status) },
+        });
+      }
 
-    // Atomic compare-and-set: ensure status hasn't changed since we inspected it
-    const allowedSources = [existing.product.status] as const;
-    const updated = await productRepository.compareAndSetStatus(db, id, allowedSources, "ARCHIVED");
-
-    if (!updated) {
-      const reFetched = await productRepository.findProductById(db, id);
-      throw new AppError({
-        statusCode: 409,
-        code: ErrorCodes.INVALID_PRODUCT_STATUS_TRANSITION,
-        message: `Cannot transition product from '${reFetched?.status}' to 'ARCHIVED'`,
-        details: {
-          from: reFetched?.status,
-          to: "ARCHIVED",
-          allowedTargets: reFetched ? getAllowedProductStatusTargets(reFetched.status) : [],
-        },
-      });
-    }
+      if (!canTransitionProductStatus(product.status, to)) {
+        throw new AppError({
+          statusCode: 409,
+          code: ErrorCodes.INVALID_PRODUCT_STATUS_TRANSITION,
+          message: `Cannot transition product from '${product.status}' to '${to}'`,
+          details: { from: product.status, to, allowedTargets: getAllowedProductStatusTargets(product.status) },
+        });
+      }
+      precondition?.(product);
+      await productRepository.updateProduct(tx, id, { status: to });
+    });
 
     const result = await productRepository.findProductByIdWithInventory(db, id);
     return formatProductResponse(result!);

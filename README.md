@@ -14,7 +14,7 @@ docker compose up -d          # PostgreSQL 17 on localhost:5433 (creates ecommer
 npm install
 npm run db:migrate            # Apply migrations to development database
 ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='a-long-passphrase' npm run seed:admin
-npm test                      # Migrates test database and runs all 140 integration tests
+npm test                      # Migrates test database and runs all 178 tests
 ```
 
 ---
@@ -23,7 +23,7 @@ npm test                      # Migrates test database and runs all 140 integrat
 
 | Script | Purpose |
 |---|---|
-| `npm test` | Run all 140 integration and unit tests against real test DB |
+| `npm test` | Run all 178 integration and unit tests against real test DB |
 | `npm run typecheck` | Strict TypeScript check (`tsc --noEmit`) |
 | `npm run db:generate` | Generate reviewable SQL migrations from Drizzle schemas |
 | `npm run db:migrate` | Apply migrations to `DATABASE_URL` |
@@ -55,6 +55,20 @@ npm test                      # Migrates test database and runs all 140 integrat
 - **Password storage:** salted `scrypt` (N=2^17, r=8, p=1) via Node's built-in crypto, with parameters encoded per hash for future upgrades.
 - **No account enumeration:** unknown email and wrong password return byte-identical `401 INVALID_CREDENTIALS` responses with matched timing.
 - **No privilege escalation:** registration always creates a `CUSTOMER`; admins are created only by `npm run seed:admin`. Suspension takes effect on the next request.
+
+### 5. Order Lifecycle
+- **Single state machine** (`order-status.ts`): `PENDING → PAID | CANCELLED`, `PAID → SHIPPED | CANCELLED`; `SHIPPED` and `CANCELLED` are terminal.
+- **Stock semantics:** checkout reserves (`reserved += q`); shipping consumes (`on_hand -= q`, `reserved -= q`); cancellation releases (`reserved -= q`). Every change writes an `inventory_movements` row, so the ledger always sums to current stock.
+- **Cancellation policy:** customers may cancel `PENDING` orders; cancelling a `PAID` order (refund required) is admin-only.
+- **Unpaid order expiry:** `PENDING` orders older than `PENDING_ORDER_TTL_MINUTES` (default 30) are auto-cancelled and their stock released, so unpaid orders cannot hoard inventory.
+
+### 6. Production Hardening
+- **Rate limiting:** 100 req/min per IP globally; `/auth/register` 5/min per IP; `/auth/login` 20/min per IP plus 5/min per IP+email. `429 RATE_LIMITED` with `Retry-After`. Set `TRUST_PROXY=true` only behind a reverse proxy.
+- **Security headers** (helmet) and **CORS denied by default** (allowlist via `CORS_ORIGINS`).
+- **Database guards:** `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout`; timeouts surface as retryable `503 SERVICE_BUSY`.
+- **Graceful shutdown:** on SIGTERM/SIGINT, stops jobs, drains in-flight requests (keep-alive sockets get `Connection: close`), closes the pool; force-exits after 10s.
+- **Background jobs:** in-process scheduler (expire unpaid orders every minute, purge expired sessions every 15 min), guarded by Postgres advisory locks so multiple instances never run the same job concurrently. Disable with `JOBS_ENABLED=false`.
+- **Lock order** everywhere: cart → products (shared) → inventory, and order → inventory, so concurrent operations cannot deadlock.
 
 ---
 
@@ -89,11 +103,20 @@ Authenticated endpoints expect `Authorization: Bearer <token>` from `POST /auth/
 - `DELETE /cart/items/:productId` — Remove line item
 - `DELETE /cart` — Clear all items
 
+### Health
+- `GET /health` — Liveness
+- `GET /ready` — Readiness (database reachable); `503` otherwise
+
 ### Checkout & Orders (Customer & Admin)
 - `POST /checkout` — Convert active cart into immutable order (requires `Idempotency-Key`)
-- `POST /orders/:id/cancel` — Cancel order and safely restore reserved stock
+- `POST /orders/:id/cancel` — Cancel order and release reserved stock (customers: `PENDING` only; admins: `PENDING` or `PAID`)
 - `GET /orders/:id` — View order with historical item snapshots
 - `GET /orders` — List user's historical orders
+
+### Order Fulfillment (Admin)
+- `GET /admin/orders?status=&userId=` — List orders across all users
+- `POST /admin/orders/:id/mark-paid` — `PENDING → PAID`
+- `POST /admin/orders/:id/ship` — `PAID → SHIPPED` (consumes reserved stock)
 
 ---
 
