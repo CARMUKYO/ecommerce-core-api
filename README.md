@@ -1,6 +1,6 @@
 # E-Commerce Core API
 
-Portfolio-grade e-commerce backend API focused on domain modeling, relational integrity, ACID transactions, and integration testing against a real PostgreSQL database.
+E-commerce backend API focused on domain modeling, relational integrity, ACID transactions, and integration testing against a real PostgreSQL database.
 
 **Stack:** Node.js · TypeScript (strict) · Fastify · PostgreSQL · Drizzle ORM · Zod · Vitest
 
