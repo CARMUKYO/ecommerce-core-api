@@ -192,7 +192,7 @@ describe("Edge Case 3 — historical orders cannot be rewritten", () => {
 
   it("prevents hard-deleting a product sitting in a cart", async () => {
     const user = await createUser();
-    const product = await createProduct();
+    const product = await createProduct({}, { onHand: 0 });
     const cart = await createCart(user.id);
     await db.insert(cartItems).values({ cartId: cart.id, productId: product.id, quantity: 1 });
     await expectPgError(db.delete(products).where(eq(products.id, product.id)), {

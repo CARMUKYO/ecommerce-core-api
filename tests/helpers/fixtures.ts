@@ -3,6 +3,7 @@ import { db } from "../../src/db/client.js";
 import {
   carts,
   inventory,
+  inventoryMovements,
   orderItems,
   orders,
   products,
@@ -37,11 +38,22 @@ export async function createProduct(
         ...overrides,
       })
       .returning();
+    const initialOnHand = stock.onHand ?? 10;
+    const initialReserved = stock.reserved ?? 0;
     await tx.insert(inventory).values({
       productId: product!.id,
-      quantityOnHand: stock.onHand ?? 10,
-      quantityReserved: stock.reserved ?? 0,
+      quantityOnHand: initialOnHand,
+      quantityReserved: initialReserved,
     });
+    if (initialOnHand > 0 || initialReserved > 0) {
+      await tx.insert(inventoryMovements).values({
+        productId: product!.id,
+        deltaOnHand: initialOnHand,
+        deltaReserved: initialReserved,
+        reason: "INITIAL_STOCK",
+        note: "Fixture initial stock",
+      });
+    }
     return product!;
   });
 }

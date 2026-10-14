@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { check, index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { inventoryMovementReasonEnum } from "./enums.js";
 import { orders } from "./orders.js";
 import { products } from "./products.js";
@@ -56,6 +56,8 @@ export const inventoryMovements = pgTable(
     orderId: uuid("order_id").references(() => orders.id, { onDelete: "restrict" }),
     actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "restrict" }),
     note: text("note"),
+    idempotencyKey: text("idempotency_key"),
+    requestFingerprint: text("request_fingerprint"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -65,6 +67,9 @@ export const inventoryMovements = pgTable(
       "inventory_movements_order_ref_chk",
       sql`${t.reason} NOT IN ('ORDER_RESERVED', 'ORDER_RELEASED', 'ORDER_SHIPPED') OR ${t.orderId} IS NOT NULL`,
     ),
+    uniqueIndex("inventory_movements_product_idempotency_uidx")
+      .on(t.productId, t.idempotencyKey)
+      .where(sql`${t.idempotencyKey} IS NOT NULL`),
     index("inventory_movements_product_created_at_idx").on(t.productId, t.createdAt),
     index("inventory_movements_order_id_idx").on(t.orderId),
   ],
