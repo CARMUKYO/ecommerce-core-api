@@ -6,7 +6,7 @@ import { AdjustInventorySchema, ListMovementsQuerySchema } from "./inventory.sch
 export const inventoryRoutes: FastifyPluginAsync = async (app) => {
   app.post(
     "/admin/products/:id/inventory/adjustments",
-    { preHandler: [app.requireRole("ADMIN")] },
+    { onRequest: [app.requireRole("ADMIN")] },
     async (request, reply) => {
       const params = ProductIdParamSchema.parse(request.params);
       const body = AdjustInventorySchema.parse(request.body);
@@ -19,7 +19,7 @@ export const inventoryRoutes: FastifyPluginAsync = async (app) => {
 
   app.get(
     "/admin/products/:id/inventory/movements",
-    { preHandler: [app.requireRole("ADMIN")] },
+    { onRequest: [app.requireRole("ADMIN")] },
     async (request, reply) => {
       const params = ProductIdParamSchema.parse(request.params);
       const query = ListMovementsQuerySchema.parse(request.query);

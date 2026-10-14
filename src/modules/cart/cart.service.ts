@@ -1,5 +1,6 @@
 import { env } from "../../config/env.js";
-import { db } from "../../db/client.js";
+import { db, type Tx } from "../../db/client.js";
+import type { Cart } from "../../db/schema/carts.js";
 import { AppError, ErrorCodes } from "../../http/errors.js";
 import { inventoryRepository } from "../inventory/inventory.repository.js";
 import { productRepository } from "../products/product.repository.js";
@@ -95,6 +96,27 @@ export function formatCartSummary(cartId: string, lines: CartItemDetailed[]): Ca
   };
 }
 
+/**
+ * Lock the user's ACTIVE cart for the rest of the transaction (optionally
+ * creating it). Lock order is cart row -> inventory rows, matching checkout.
+ *
+ * If a checkout converts the cart while we wait for the lock, the locking
+ * SELECT returns nothing; with `create` we then fall through to the user's
+ * fresh cart, so the write is serialized *after* the purchase and can never
+ * land in a CONVERTED cart.
+ */
+async function lockActiveCart(tx: Tx, userId: string, opts: { create: true }): Promise<Cart>;
+async function lockActiveCart(tx: Tx, userId: string, opts: { create: false }): Promise<Cart | undefined>;
+async function lockActiveCart(tx: Tx, userId: string, opts: { create: boolean }): Promise<Cart | undefined> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const locked = await cartRepository.findActiveCartForUpdate(tx, userId);
+    if (locked) return locked;
+    if (!opts.create) return undefined;
+    await cartRepository.getOrCreateActiveCart(tx, userId);
+  }
+  throw new Error(`Could not acquire a lock on an ACTIVE cart for user ${userId}`);
+}
+
 export class CartService {
   async getCartSummary(userId: string): Promise<CartSummary> {
     const cart = await cartRepository.getOrCreateActiveCart(db, userId);
@@ -127,7 +149,7 @@ export class CartService {
 
     // 3. Atomically upsert in transaction
     const cartId = await db.transaction(async (tx) => {
-      const cart = await cartRepository.getOrCreateActiveCart(tx, userId);
+      const cart = await lockActiveCart(tx, userId, { create: true });
 
       const existingItem = await cartRepository.findCartItem(tx, cart.id, input.productId);
 
@@ -192,61 +214,70 @@ export class CartService {
   }
 
   async updateItemQuantity(userId: string, productId: string, quantity: number): Promise<CartSummary> {
-    const cart = await cartRepository.findActiveCartByUserId(db, userId);
-    if (!cart) {
-      throw new AppError({
-        statusCode: 404,
-        code: ErrorCodes.CART_ITEM_NOT_FOUND,
-        message: "Cart item was not found",
-      });
-    }
+    const cartId = await db.transaction(async (tx) => {
+      const cart = await lockActiveCart(tx, userId, { create: false });
+      if (!cart) {
+        throw new AppError({
+          statusCode: 404,
+          code: ErrorCodes.CART_ITEM_NOT_FOUND,
+          message: "Cart item was not found",
+        });
+      }
 
-    const existingItem = await cartRepository.findCartItem(db, cart.id, productId);
-    if (!existingItem) {
-      throw new AppError({
-        statusCode: 404,
-        code: ErrorCodes.CART_ITEM_NOT_FOUND,
-        message: "Cart item was not found",
-      });
-    }
+      const existingItem = await cartRepository.findCartItem(tx, cart.id, productId);
+      if (!existingItem) {
+        throw new AppError({
+          statusCode: 404,
+          code: ErrorCodes.CART_ITEM_NOT_FOUND,
+          message: "Cart item was not found",
+        });
+      }
 
-    const product = await productRepository.findProductById(db, productId);
-    if (!product || product.status !== "ACTIVE") {
-      throw new AppError({
-        statusCode: 404,
-        code: ErrorCodes.PRODUCT_NOT_FOUND,
-        message: `Product with ID '${productId}' was not found or is no longer active`,
-      });
-    }
+      const product = await productRepository.findProductById(tx, productId);
+      if (!product || product.status !== "ACTIVE") {
+        throw new AppError({
+          statusCode: 404,
+          code: ErrorCodes.PRODUCT_NOT_FOUND,
+          message: `Product with ID '${productId}' was not found or is no longer active`,
+        });
+      }
 
-    const inv = await inventoryRepository.findInventoryByProductId(db, productId);
-    const available = inv ? Math.max(0, inv.quantityOnHand - inv.quantityReserved) : 0;
-    if (quantity > available) {
-      throw new AppError({
-        statusCode: 409,
-        code: ErrorCodes.INSUFFICIENT_INVENTORY,
-        message: `Requested ${quantity} units of SKU '${product.sku}', but only ${available} is available.`,
-        details: { sku: product.sku, requested: quantity, available },
-      });
-    }
+      const inv = await inventoryRepository.findInventoryByProductId(tx, productId);
+      const available = inv ? Math.max(0, inv.quantityOnHand - inv.quantityReserved) : 0;
+      if (quantity > available) {
+        throw new AppError({
+          statusCode: 409,
+          code: ErrorCodes.INSUFFICIENT_INVENTORY,
+          message: `Requested ${quantity} units of SKU '${product.sku}', but only ${available} is available.`,
+          details: { sku: product.sku, requested: quantity, available },
+        });
+      }
 
-    await cartRepository.updateCartItemQuantity(db, cart.id, productId, quantity);
+      await cartRepository.updateCartItemQuantity(tx, cart.id, productId, quantity);
+      return cart.id;
+    });
 
-    const lines = await cartRepository.findCartItemsWithDetails(db, cart.id);
-    return formatCartSummary(cart.id, lines);
+    const lines = await cartRepository.findCartItemsWithDetails(db, cartId);
+    return formatCartSummary(cartId, lines);
   }
 
   async removeItem(userId: string, productId: string): Promise<CartSummary> {
-    const cart = await cartRepository.getOrCreateActiveCart(db, userId);
-    await cartRepository.deleteCartItem(db, cart.id, productId);
-    const lines = await cartRepository.findCartItemsWithDetails(db, cart.id);
-    return formatCartSummary(cart.id, lines);
+    const cartId = await db.transaction(async (tx) => {
+      const cart = await lockActiveCart(tx, userId, { create: true });
+      await cartRepository.deleteCartItem(tx, cart.id, productId);
+      return cart.id;
+    });
+    const lines = await cartRepository.findCartItemsWithDetails(db, cartId);
+    return formatCartSummary(cartId, lines);
   }
 
   async clearCart(userId: string): Promise<CartSummary> {
-    const cart = await cartRepository.getOrCreateActiveCart(db, userId);
-    await cartRepository.clearCart(db, cart.id);
-    return formatCartSummary(cart.id, []);
+    const cartId = await db.transaction(async (tx) => {
+      const cart = await lockActiveCart(tx, userId, { create: true });
+      await cartRepository.clearCart(tx, cart.id);
+      return cart.id;
+    });
+    return formatCartSummary(cartId, []);
   }
 }
 

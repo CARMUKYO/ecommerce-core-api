@@ -19,6 +19,26 @@ export class CartRepository {
     return row;
   }
 
+  /**
+   * Lock the user's ACTIVE cart row. Under READ COMMITTED, if a concurrent
+   * checkout converts the cart while we wait, Postgres re-evaluates the WHERE
+   * clause against the committed row and returns nothing.
+   */
+  async findActiveCartForUpdate(executor: DbExecutor, userId: string): Promise<Cart | undefined> {
+    const [row] = await executor
+      .select()
+      .from(carts)
+      .where(and(eq(carts.userId, userId), eq(carts.status, "ACTIVE")))
+      .for("update");
+    return row;
+  }
+
+  /** Lock a cart row by id, returning its current (post-wait) status. */
+  async lockCart(executor: DbExecutor, cartId: string): Promise<Cart | undefined> {
+    const [row] = await executor.select().from(carts).where(eq(carts.id, cartId)).for("update");
+    return row;
+  }
+
   async getOrCreateActiveCart(executor: DbExecutor, userId: string): Promise<Cart> {
     const existing = await this.findActiveCartByUserId(executor, userId);
     if (existing) return existing;

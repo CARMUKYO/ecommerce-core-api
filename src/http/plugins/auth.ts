@@ -1,13 +1,14 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
-import { eq } from "drizzle-orm";
-import { db } from "../../db/client.js";
-import { users, type User } from "../../db/schema/users.js";
+import type { User } from "../../db/schema/users.js";
+import { authService } from "../../modules/auth/auth.service.js";
 import { AppError, ErrorCodes } from "../errors.js";
 
 declare module "fastify" {
   interface FastifyRequest {
     user: User | null;
+    /** The authenticated session, so logout can revoke exactly this one. */
+    sessionId: string | null;
   }
   interface FastifyInstance {
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -17,8 +18,9 @@ declare module "fastify" {
 
 const authPluginImpl: FastifyPluginAsync = async (fastify) => {
   fastify.decorateRequest("user", null);
+  fastify.decorateRequest("sessionId", null);
 
-  const resolveUserFromHeader = async (request: FastifyRequest): Promise<User> => {
+  const resolveSessionFromHeader = async (request: FastifyRequest): Promise<{ user: User; sessionId: string }> => {
     const authHeader = request.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       throw new AppError({
@@ -37,30 +39,13 @@ const authPluginImpl: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    // Dev/test auth seam: Bearer token is the user ID UUID
-    const [user] = await db.select().from(users).where(eq(users.id, token));
-    if (!user) {
-      throw new AppError({
-        statusCode: 401,
-        code: ErrorCodes.UNAUTHENTICATED,
-        message: "Invalid authentication credentials",
-      });
-    }
-
-    if (user.status === "SUSPENDED") {
-      throw new AppError({
-        statusCode: 403,
-        code: ErrorCodes.ACCOUNT_SUSPENDED,
-        message: "User account is suspended",
-      });
-    }
-
-    return user;
+    return await authService.authenticate(token);
   };
 
   fastify.decorate("authenticate", async (request: FastifyRequest, _reply: FastifyReply) => {
-    const user = await resolveUserFromHeader(request);
+    const { user, sessionId } = await resolveSessionFromHeader(request);
     request.user = user;
+    request.sessionId = sessionId;
   });
 
   fastify.decorate("requireRole", (role: "ADMIN" | "CUSTOMER") => {

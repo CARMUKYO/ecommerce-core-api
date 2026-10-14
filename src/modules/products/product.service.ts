@@ -1,4 +1,5 @@
 import { db } from "../../db/client.js";
+import { isUniqueViolation } from "../../db/pg-errors.js";
 import type { User } from "../../db/schema/users.js";
 import { AppError, ErrorCodes } from "../../http/errors.js";
 import { inventoryRepository } from "../inventory/inventory.repository.js";
@@ -60,7 +61,55 @@ export function formatProductResponse(item: ProductWithInventory): FormattedProd
   };
 }
 
+/**
+ * Public catalog view. Built as an explicit allowlist so new internal fields
+ * can never leak by default. On-hand and reserved counts (which reveal sales
+ * velocity) and the inventory version token are admin-only.
+ */
+export interface PublicProduct {
+  id: string;
+  sku: string;
+  name: string;
+  description: string;
+  priceCents: number;
+  currency: string;
+  status: ProductStatus;
+  createdAt: Date;
+  updatedAt: Date;
+  inventory: {
+    availableQuantity: number;
+    inStock: boolean;
+  };
+}
+
+export function toPublicProduct(p: FormattedProduct): PublicProduct {
+  return {
+    id: p.id,
+    sku: p.sku,
+    name: p.name,
+    description: p.description,
+    priceCents: p.priceCents,
+    currency: p.currency,
+    status: p.status,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+    inventory: {
+      availableQuantity: p.inventory.availableQuantity,
+      inStock: p.inventory.inStock,
+    },
+  };
+}
+
 export class ProductService {
+  async getPublicProductById(id: string): Promise<PublicProduct> {
+    return toPublicProduct(await this.getProductById(id, { mustBeActive: true }));
+  }
+
+  async listPublicProducts(opts: { limit: number; offset: number }): Promise<{ items: PublicProduct[]; total: number }> {
+    const result = await this.listProducts({ mustBeActive: true, ...opts });
+    return { items: result.items.map(toPublicProduct), total: result.total };
+  }
+
   async createProduct(actor: User, input: CreateProductInput): Promise<FormattedProduct> {
     const normalizedSku = input.sku.trim().toUpperCase();
 
@@ -95,7 +144,7 @@ export class ProductService {
         return formatProductResponse({ product, inventory: inv });
       });
     } catch (err: unknown) {
-      if ((err as { code?: string }).code === "23505") {
+      if (isUniqueViolation(err, "products_sku_key")) {
         throw new AppError({
           statusCode: 409,
           code: ErrorCodes.SKU_ALREADY_EXISTS,
@@ -156,7 +205,7 @@ export class ProductService {
     try {
       await productRepository.updateProduct(db, id, updates);
     } catch (err: unknown) {
-      if ((err as { code?: string }).code === "23505") {
+      if (isUniqueViolation(err, "products_sku_key")) {
         throw new AppError({
           statusCode: 409,
           code: ErrorCodes.SKU_ALREADY_EXISTS,

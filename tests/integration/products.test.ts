@@ -18,7 +18,7 @@ describe("Products API Integration", () => {
       const res = await app.inject({
         method: "POST",
         url: "/admin/products",
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: {
           sku: "tshirt-blue-m",
           name: "Blue T-Shirt Medium",
@@ -57,7 +57,7 @@ describe("Products API Integration", () => {
       const res = await app.inject({
         method: "POST",
         url: "/admin/products",
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: {
           sku: "CAP-RED",
           name: "Red Cap",
@@ -79,14 +79,14 @@ describe("Products API Integration", () => {
       await app.inject({
         method: "POST",
         url: "/admin/products",
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: { sku: "DUPLICATE-SKU", name: "Original", priceCents: 1000 },
       });
 
       const res = await app.inject({
         method: "POST",
         url: "/admin/products",
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: { sku: " duplicate-sku ", name: "Copycat", priceCents: 1200 },
       });
 
@@ -100,7 +100,7 @@ describe("Products API Integration", () => {
         app.inject({
           method: "POST",
           url: "/admin/products",
-          headers: { authorization: `Bearer ${admin.id}` },
+          headers: { authorization: `Bearer ${admin.token}` },
           payload: { sku: "RACE-SKU", name: "Race Item", priceCents: 1999 },
         });
 
@@ -122,7 +122,7 @@ describe("Products API Integration", () => {
       const floatRes = await app.inject({
         method: "POST",
         url: "/admin/products",
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: { sku: "FLOAT-PRICE", name: "Item", priceCents: 19.99 },
       });
       expect(floatRes.statusCode).toBe(400);
@@ -132,7 +132,7 @@ describe("Products API Integration", () => {
       const negRes = await app.inject({
         method: "POST",
         url: "/admin/products",
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: { sku: "NEG-PRICE", name: "Item", priceCents: -500 },
       });
       expect(negRes.statusCode).toBe(400);
@@ -141,7 +141,7 @@ describe("Products API Integration", () => {
       const blankRes = await app.inject({
         method: "POST",
         url: "/admin/products",
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: { sku: "BLANK-NAME", name: "   ", priceCents: 1000 },
       });
       expect(blankRes.statusCode).toBe(400);
@@ -157,7 +157,7 @@ describe("Products API Integration", () => {
       const actRes = await app.inject({
         method: "POST",
         url: `/admin/products/${product.id}/activate`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
       });
       expect(actRes.statusCode).toBe(200);
       expect(actRes.json().product.status).toBe("ACTIVE");
@@ -166,7 +166,7 @@ describe("Products API Integration", () => {
       const arcRes = await app.inject({
         method: "POST",
         url: `/admin/products/${product.id}/archive`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
       });
       expect(arcRes.statusCode).toBe(200);
       expect(arcRes.json().product.status).toBe("ARCHIVED");
@@ -175,7 +175,7 @@ describe("Products API Integration", () => {
       const relistRes = await app.inject({
         method: "POST",
         url: `/admin/products/${product.id}/activate`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
       });
       expect(relistRes.statusCode).toBe(200);
       expect(relistRes.json().product.status).toBe("ACTIVE");
@@ -188,7 +188,7 @@ describe("Products API Integration", () => {
       const res = await app.inject({
         method: "POST",
         url: `/admin/products/${product.id}/activate`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
       });
 
       expect(res.statusCode).toBe(422);
@@ -206,7 +206,7 @@ describe("Products API Integration", () => {
       const res = await app.inject({
         method: "POST",
         url: `/admin/products/${product.id}/activate`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
       });
 
       expect(res.statusCode).toBe(200);
@@ -221,12 +221,12 @@ describe("Products API Integration", () => {
         app.inject({
           method: "POST",
           url: `/admin/products/${product.id}/activate`,
-          headers: { authorization: `Bearer ${admin.id}` },
+          headers: { authorization: `Bearer ${admin.token}` },
         }),
         app.inject({
           method: "POST",
           url: `/admin/products/${product.id}/archive`,
-          headers: { authorization: `Bearer ${admin.id}` },
+          headers: { authorization: `Bearer ${admin.token}` },
         }),
       ]);
 
@@ -252,7 +252,7 @@ describe("Products API Integration", () => {
       const res = await app.inject({
         method: "PATCH",
         url: `/admin/products/${product.id}`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: {
           name: "Updated Name",
           priceCents: 2999,
@@ -278,7 +278,7 @@ describe("Products API Integration", () => {
       const draftRes = await app.inject({
         method: "PATCH",
         url: `/admin/products/${draft.id}`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: { sku: "draft-sku-updated" },
       });
       expect(draftRes.statusCode).toBe(200);
@@ -289,7 +289,7 @@ describe("Products API Integration", () => {
       const activeRes = await app.inject({
         method: "PATCH",
         url: `/admin/products/${active.id}`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: { sku: "NEW-SKU" },
       });
       expect(activeRes.statusCode).toBe(409);
@@ -303,7 +303,7 @@ describe("Products API Integration", () => {
       const res = await app.inject({
         method: "PATCH",
         url: `/admin/products/${archived.id}`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: { name: "Try to rename" },
       });
 
@@ -318,7 +318,7 @@ describe("Products API Integration", () => {
       const res = await app.inject({
         method: "PATCH",
         url: `/admin/products/${active.id}`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: { priceCents: 0 },
       });
 
@@ -333,7 +333,7 @@ describe("Products API Integration", () => {
       const res = await app.inject({
         method: "PATCH",
         url: `/admin/products/${product.id}`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: {},
       });
 
@@ -381,6 +381,40 @@ describe("Products API Integration", () => {
       expect(data.inventory).toMatchObject({
         availableQuantity: 7,
         inStock: true,
+      });
+    });
+
+    it("exposes ONLY availability on public routes: no on-hand, reserved, or version", async () => {
+      const product = await createProduct({ status: "ACTIVE" }, { onHand: 10, reserved: 3 });
+
+      const detail = await app.inject({ method: "GET", url: `/products/${product.id}` });
+      const list = await app.inject({ method: "GET", url: "/products" });
+      const listed = list.json().items.find((i: { id: string }) => i.id === product.id);
+
+      for (const p of [detail.json().product, listed]) {
+        expect(p.inventory).toEqual({ availableQuantity: 7, inStock: true });
+        expect(Object.keys(p).sort()).toEqual(
+          ["createdAt", "currency", "description", "id", "inventory", "name", "priceCents", "sku", "status", "updatedAt"],
+        );
+      }
+    });
+
+    it("still exposes full inventory detail on admin routes", async () => {
+      const admin = await createUser({ role: "ADMIN" });
+      const product = await createProduct({ status: "ACTIVE" }, { onHand: 10, reserved: 3 });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/admin/products/${product.id}`,
+        headers: { authorization: `Bearer ${admin.token}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().product.inventory).toEqual({
+        quantityOnHand: 10,
+        quantityReserved: 3,
+        availableQuantity: 7,
+        inStock: true,
+        version: 0,
       });
     });
   });

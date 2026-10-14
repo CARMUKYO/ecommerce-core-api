@@ -7,6 +7,7 @@ import {
   orderItems,
   orders,
   products,
+  sessions,
   users,
   type Cart,
   type NewProduct,
@@ -14,13 +15,27 @@ import {
   type Product,
   type User,
 } from "../../src/db/schema/index.js";
+import { generateSessionToken, hashSessionToken } from "../../src/modules/auth/credentials.js";
 
-export async function createUser(overrides: Partial<typeof users.$inferInsert> = {}): Promise<User> {
+export type TestUser = User & { token: string };
+
+/**
+ * Creates a user plus a live session, returning the raw bearer token. The
+ * password hash is a placeholder (no scrypt cost); tests that exercise real
+ * login go through POST /auth/register + /auth/login instead.
+ */
+export async function createUser(overrides: Partial<typeof users.$inferInsert> = {}): Promise<TestUser> {
   const [row] = await db
     .insert(users)
     .values({ email: `user-${randomUUID()}@test.dev`, passwordHash: "x", ...overrides })
     .returning();
-  return row!;
+  const token = generateSessionToken();
+  await db.insert(sessions).values({
+    userId: row!.id,
+    tokenHash: hashSessionToken(token),
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+  });
+  return { ...row!, token };
 }
 
 export async function createProduct(

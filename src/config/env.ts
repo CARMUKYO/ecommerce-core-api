@@ -7,6 +7,8 @@ const EnvSchema = z.object({
   DATABASE_URL: z.url(),
   TEST_DATABASE_URL: z.url().optional(),
   CART_MAX_LINE_QUANTITY: z.coerce.number().int().min(1).max(999).default(99),
+  // Absolute session lifetime. Default 7 days.
+  SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 90).default(168),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

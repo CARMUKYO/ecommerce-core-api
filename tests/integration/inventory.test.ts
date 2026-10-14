@@ -23,7 +23,7 @@ describe("Inventory API Integration", () => {
         method: "POST",
         url: `/admin/products/${product.id}/inventory/adjustments`,
         headers: {
-          authorization: `Bearer ${admin.id}`,
+          authorization: `Bearer ${admin.token}`,
           "idempotency-key": idempotencyKey,
         },
         payload: {
@@ -65,7 +65,7 @@ describe("Inventory API Integration", () => {
         method: "POST",
         url: `/admin/products/${product.id}/inventory/adjustments`,
         headers: {
-          authorization: `Bearer ${admin.id}`,
+          authorization: `Bearer ${admin.token}`,
           "idempotency-key": randomUUID(),
         },
         payload: {
@@ -97,7 +97,7 @@ describe("Inventory API Integration", () => {
         method: "POST",
         url: `/admin/products/${product.id}/inventory/adjustments`,
         headers: {
-          authorization: `Bearer ${admin.id}`,
+          authorization: `Bearer ${admin.token}`,
           "idempotency-key": randomUUID(),
         },
         payload: {
@@ -123,7 +123,7 @@ describe("Inventory API Integration", () => {
         method: "POST",
         url: `/admin/products/${product.id}/inventory/adjustments`,
         headers: {
-          authorization: `Bearer ${admin.id}`,
+          authorization: `Bearer ${admin.token}`,
           "idempotency-key": randomUUID(),
         },
         payload: {
@@ -144,7 +144,7 @@ describe("Inventory API Integration", () => {
         method: "POST",
         url: `/admin/products/${product.id}/inventory/adjustments`,
         headers: {
-          authorization: `Bearer ${admin.id}`,
+          authorization: `Bearer ${admin.token}`,
           "idempotency-key": randomUUID(),
         },
         payload: {
@@ -164,7 +164,7 @@ describe("Inventory API Integration", () => {
       const res = await app.inject({
         method: "POST",
         url: `/admin/products/${product.id}/inventory/adjustments`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
         payload: { delta: 10, note: "Restock" },
       });
 
@@ -181,7 +181,7 @@ describe("Inventory API Integration", () => {
       const res1 = await app.inject({
         method: "POST",
         url: `/admin/products/${product.id}/inventory/adjustments`,
-        headers: { authorization: `Bearer ${admin.id}`, "idempotency-key": key },
+        headers: { authorization: `Bearer ${admin.token}`, "idempotency-key": key },
         payload: { delta: 5, note: "First call" },
       });
       expect(res1.statusCode).toBe(200);
@@ -192,7 +192,7 @@ describe("Inventory API Integration", () => {
       const res2 = await app.inject({
         method: "POST",
         url: `/admin/products/${product.id}/inventory/adjustments`,
-        headers: { authorization: `Bearer ${admin.id}`, "idempotency-key": key },
+        headers: { authorization: `Bearer ${admin.token}`, "idempotency-key": key },
         payload: { delta: 5, note: "First call" },
       });
       expect(res2.statusCode).toBe(200);
@@ -212,14 +212,14 @@ describe("Inventory API Integration", () => {
       await app.inject({
         method: "POST",
         url: `/admin/products/${product.id}/inventory/adjustments`,
-        headers: { authorization: `Bearer ${admin.id}`, "idempotency-key": key },
+        headers: { authorization: `Bearer ${admin.token}`, "idempotency-key": key },
         payload: { delta: 5, note: "Payload A" },
       });
 
       const res = await app.inject({
         method: "POST",
         url: `/admin/products/${product.id}/inventory/adjustments`,
-        headers: { authorization: `Bearer ${admin.id}`, "idempotency-key": key },
+        headers: { authorization: `Bearer ${admin.token}`, "idempotency-key": key },
         payload: { delta: 10, note: "Payload B" },
       });
 
@@ -235,7 +235,7 @@ describe("Inventory API Integration", () => {
         app.inject({
           method: "POST",
           url: `/admin/products/${product.id}/inventory/adjustments`,
-          headers: { authorization: `Bearer ${admin.id}`, "idempotency-key": randomUUID() },
+          headers: { authorization: `Bearer ${admin.token}`, "idempotency-key": randomUUID() },
           payload: { delta: 1, note: "Parallel increment" },
         });
 
@@ -254,7 +254,7 @@ describe("Inventory API Integration", () => {
       const res = await app.inject({
         method: "POST",
         url: `/admin/products/${product.id}/inventory/adjustments`,
-        headers: { authorization: `Bearer ${admin.id}`, "idempotency-key": randomUUID() },
+        headers: { authorization: `Bearer ${admin.token}`, "idempotency-key": randomUUID() },
         payload: { delta: 5, note: "Warehouse recount for discontinued product" },
       });
 
@@ -272,7 +272,7 @@ describe("Inventory API Integration", () => {
         await app.inject({
           method: "POST",
           url: `/admin/products/${product.id}/inventory/adjustments`,
-          headers: { authorization: `Bearer ${admin.id}`, "idempotency-key": randomUUID() },
+          headers: { authorization: `Bearer ${admin.token}`, "idempotency-key": randomUUID() },
           payload: { delta: d, note: `Delta ${d}` },
         });
       }
@@ -302,7 +302,7 @@ describe("Inventory API Integration", () => {
         await app.inject({
           method: "POST",
           url: `/admin/products/${product.id}/inventory/adjustments`,
-          headers: { authorization: `Bearer ${admin.id}`, "idempotency-key": randomUUID() },
+          headers: { authorization: `Bearer ${admin.token}`, "idempotency-key": randomUUID() },
           payload: { delta: i, note: `Adjustment #${i}` },
         });
       }
@@ -310,7 +310,7 @@ describe("Inventory API Integration", () => {
       const res = await app.inject({
         method: "GET",
         url: `/admin/products/${product.id}/inventory/movements?limit=2&offset=0`,
-        headers: { authorization: `Bearer ${admin.id}` },
+        headers: { authorization: `Bearer ${admin.token}` },
       });
 
       expect(res.statusCode).toBe(200);

@@ -8,7 +8,9 @@ import { cartService } from "./cart.service.js";
 
 export const cartRoutes: FastifyPluginAsync = async (app) => {
   // All cart endpoints require an authenticated user
-  app.addHook("preHandler", app.authenticate);
+  // onRequest runs before body parsing: unauthenticated requests are rejected
+  // with 401 before we spend any work on (or reveal anything about) the body.
+  app.addHook("onRequest", app.authenticate);
 
   app.get("/cart", async (request, reply) => {
     const summary = await cartService.getCartSummary(request.user!.id);

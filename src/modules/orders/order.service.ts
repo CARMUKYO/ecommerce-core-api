@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
-import { db } from "../../db/client.js";
+import { db, type Tx } from "../../db/client.js";
+import { findPgError, PgErrorCodes } from "../../db/pg-errors.js";
 import type { Order, OrderItem } from "../../db/schema/orders.js";
 import type { User } from "../../db/schema/users.js";
 import { AppError, ErrorCodes } from "../../http/errors.js";
 import { cartRepository, type CartItemDetailed } from "../cart/cart.repository.js";
 import { inventoryRepository } from "../inventory/inventory.repository.js";
+import { canTransitionOrderStatus, getAllowedOrderStatusTargets, type OrderStatus } from "./order-status.js";
 import { orderRepository, type OrderWithItems } from "./order.repository.js";
 
 export interface FormattedOrderItem {
@@ -59,6 +61,7 @@ export function formatOrderResponse(data: OrderWithItems): FormattedOrder {
   };
 }
 
+/** Records the cart contents that were purchased (audit only; not used to reject retries). */
 function computeFingerprint(lines: CartItemDetailed[]): string {
   const sorted = lines
     .map((l) => ({ productId: l.item.productId, quantity: l.item.quantity }))
@@ -66,15 +69,6 @@ function computeFingerprint(lines: CartItemDetailed[]): string {
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex");
 }
 
-function findPgError(err: unknown): { code?: string; constraint?: string } | undefined {
-  let current: unknown = err;
-  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
-    const e = current as { code?: string; constraint?: string; cause?: unknown };
-    if (typeof e.code === "string" && /^[0-9A-Z]{5}$/.test(e.code)) return e;
-    current = e.cause;
-  }
-  return undefined;
-}
 
 export class OrderService {
   async checkout(actor: User, idempotencyKey?: string | undefined): Promise<{ order: FormattedOrder; replayed: boolean }> {
@@ -100,27 +94,47 @@ export class OrderService {
         // 1. Idempotency check: has an order already been created with this key?
         const existing = await orderRepository.findOrderByUserAndIdempotencyKey(tx, actor.id, trimmedKey);
 
-        // 2. Fetch active cart
-        const cart = await cartRepository.findActiveCartByUserId(tx, actor.id);
-        const lines = cart ? await cartRepository.findCartItemsWithDetails(tx, cart.id) : [];
-
+        // The key identifies the *request*, not a cart state. Checkout has no
+        // body, so any request with this (user, key) is a retry of the original:
+        // replay the stored order (in its current status) regardless of what the
+        // user's cart holds now. Read-only — no cart lock, no inventory touched.
         if (existing) {
-          // If the user has an active cart with items, ensure it's not key reuse for a new payload
-          if (lines.length > 0) {
-            const fingerprint = computeFingerprint(lines);
-            if (existing.order.requestFingerprint !== fingerprint) {
-              throw new AppError({
-                statusCode: 422,
-                code: ErrorCodes.IDEMPOTENCY_KEY_REUSED,
-                message: "The provided Idempotency-Key has already been used with a different cart payload",
-              });
-            }
-          }
-          // Network retry of converted cart: replay existing order
           return { order: formatOrderResponse(existing), replayed: true };
         }
 
-        if (!cart || lines.length === 0) {
+        // 2. Fetch active cart
+        const activeCart = await cartRepository.findActiveCartByUserId(tx, actor.id);
+
+        if (!activeCart) {
+          throw new AppError({
+            statusCode: 400,
+            code: ErrorCodes.CART_EMPTY,
+            message: "Cannot checkout: your cart has no items",
+          });
+        }
+
+        // 3. Lock the cart row (lock order: cart -> inventory). This serializes
+        // checkout against concurrent cart writes and competing checkouts.
+        const cart = await cartRepository.lockCart(tx, activeCart.id);
+        if (!cart || cart.status !== "ACTIVE") {
+          // Another checkout converted this cart while we waited for the lock.
+          // Same key -> it was our own concurrent retry: replay its order.
+          const raced = await orderRepository.findOrderByUserAndIdempotencyKey(tx, actor.id, trimmedKey);
+          if (raced) {
+            return { order: formatOrderResponse(raced), replayed: true };
+          }
+          const winner = await orderRepository.findOrderByCartId(tx, activeCart.id);
+          throw new AppError({
+            statusCode: 409,
+            code: ErrorCodes.CART_ALREADY_CHECKED_OUT,
+            message: "This cart has already been checked out by another request",
+            details: { cartId: activeCart.id, ...(winner ? { orderId: winner.id } : {}) },
+          });
+        }
+
+        // Read lines only under the lock so the order matches the cart exactly.
+        const lines = await cartRepository.findCartItemsWithDetails(tx, cart.id);
+        if (lines.length === 0) {
           throw new AppError({
             statusCode: 400,
             code: ErrorCodes.CART_EMPTY,
@@ -201,8 +215,11 @@ export class OrderService {
 
         const createdItems = await orderRepository.createOrderItems(tx, orderItemsToInsert);
 
-        // 10. Convert cart status
-        await orderRepository.convertCartStatus(tx, cart.id);
+        // 10. Convert cart status (cannot fail while we hold the cart lock)
+        const converted = await orderRepository.convertCartStatus(tx, cart.id);
+        if (!converted) {
+          throw new Error(`Invariant violated: locked cart ${cart.id} was no longer ACTIVE at conversion`);
+        }
 
         return {
           order: formatOrderResponse({ order, items: createdItems }),
@@ -212,117 +229,188 @@ export class OrderService {
     } catch (err: unknown) {
       // Concurrency race on idempotency key or cart: re-query existing order
       const pgErr = findPgError(err);
-      if (pgErr?.code === "23505") {
+      if (pgErr?.code === PgErrorCodes.UNIQUE_VIOLATION) {
         const existing = await orderRepository.findOrderByUserAndIdempotencyKey(db, actor.id, trimmedKey);
         if (existing) {
           return { order: formatOrderResponse(existing), replayed: true };
+        }
+        if (pgErr.constraint === "orders_cart_id_key") {
+          throw new AppError({
+            statusCode: 409,
+            code: ErrorCodes.CART_ALREADY_CHECKED_OUT,
+            message: "This cart has already been checked out by another request",
+          });
         }
       }
       throw err;
     }
   }
 
+  /**
+   * Customer or admin cancellation. Policy (#8): customers may cancel only
+   * PENDING orders; PAID orders involve a refund and require an admin.
+   */
   async cancelOrder(actor: User, orderId: string): Promise<{ order: FormattedOrder; alreadyCancelled: boolean }> {
     return await db.transaction(async (tx) => {
-      // 1. Fetch order with items
-      const existing = await orderRepository.findOrderWithItems(tx, orderId);
-      if (!existing || (actor.role !== "ADMIN" && existing.order.userId !== actor.id)) {
-        throw new AppError({
-          statusCode: 404,
-          code: ErrorCodes.ORDER_NOT_FOUND,
-          message: `Order with ID '${orderId}' was not found`,
-        });
-      }
+      const existing = await this.lockVisibleOrder(tx, actor, orderId);
 
-      // 2. Idempotent no-op if already cancelled
       if (existing.order.status === "CANCELLED") {
         return { order: formatOrderResponse(existing), alreadyCancelled: true };
       }
+      assertTransition(existing.order.status, "CANCELLED");
 
-      // 3. Shipped orders cannot be cancelled
+      if (existing.order.status === "PAID" && actor.role !== "ADMIN") {
+        throw new AppError({
+          statusCode: 403,
+          code: ErrorCodes.CANCELLATION_REQUIRES_ADMIN,
+          message: "Paid orders can only be cancelled by an administrator (a refund is required)",
+          details: { status: existing.order.status },
+        });
+      }
+
+      const order = await cancelLocked(tx, existing, actor.id, "Order cancelled");
+      return { order: formatOrderResponse({ order, items: existing.items }), alreadyCancelled: false };
+    });
+  }
+
+  /** Admin: PENDING -> PAID. Stock stays reserved until shipping. Idempotent. */
+  async markPaid(actor: User, orderId: string): Promise<{ order: FormattedOrder; alreadyPaid: boolean }> {
+    return await db.transaction(async (tx) => {
+      const existing = await this.lockVisibleOrder(tx, actor, orderId);
+      if (existing.order.status === "PAID") {
+        return { order: formatOrderResponse(existing), alreadyPaid: true };
+      }
+      assertTransition(existing.order.status, "PAID");
+
+      const order = await orderRepository.updateOrderStatus(tx, orderId, "PAID", { paidAt: new Date() });
+      return { order: formatOrderResponse({ order, items: existing.items }), alreadyPaid: false };
+    });
+  }
+
+  /** Admin: PAID -> SHIPPED. Reserved units leave the warehouse (on_hand -= q, reserved -= q). Idempotent. */
+  async shipOrder(actor: User, orderId: string): Promise<{ order: FormattedOrder; alreadyShipped: boolean }> {
+    return await db.transaction(async (tx) => {
+      const existing = await this.lockVisibleOrder(tx, actor, orderId);
       if (existing.order.status === "SHIPPED") {
-        throw new AppError({
-          statusCode: 409,
-          code: ErrorCodes.INVALID_ORDER_STATE_TRANSITION,
-          message: "Shipped orders cannot be cancelled directly; requires a return flow",
-        });
+        return { order: formatOrderResponse(existing), alreadyShipped: true };
       }
+      assertTransition(existing.order.status, "SHIPPED");
 
-      if (existing.order.status !== "PENDING" && existing.order.status !== "PAID") {
-        throw new AppError({
-          statusCode: 409,
-          code: ErrorCodes.INVALID_ORDER_STATE_TRANSITION,
-          message: `Cannot cancel order in status '${existing.order.status}'`,
-        });
-      }
-
-      // 4. Atomic compare-and-set
-      const updatedOrder = await orderRepository.compareAndSetStatus(
-        tx,
-        orderId,
-        ["PENDING", "PAID"],
-        "CANCELLED",
-        { cancelledAt: new Date() },
-      );
-
-      if (!updatedOrder) {
-        // Concurrently cancelled
-        const current = await orderRepository.findOrderWithItems(tx, orderId);
-        if (current?.order.status === "CANCELLED") {
-          return { order: formatOrderResponse(current), alreadyCancelled: true };
-        }
-        throw new AppError({
-          statusCode: 409,
-          code: ErrorCodes.INVALID_ORDER_STATE_TRANSITION,
-          message: `Cannot cancel order in status '${current?.order.status}'`,
-        });
-      }
-
-      // 5. Restore reserved inventory and record movements
-      const sortedProductIds = Array.from(new Set(existing.items.map((i) => i.productId))).sort();
-      await orderRepository.lockInventoryRows(tx, sortedProductIds);
-
+      await orderRepository.lockInventoryRows(tx, sortedProductIds(existing.items));
       for (const item of existing.items) {
-        await orderRepository.decrementReservedInventory(tx, item.productId, item.quantity);
-
+        await orderRepository.shipReservedInventory(tx, item.productId, item.quantity);
         await inventoryRepository.insertMovement(tx, {
           productId: item.productId,
-          deltaOnHand: 0,
+          deltaOnHand: -item.quantity,
           deltaReserved: -item.quantity,
-          reason: "ORDER_RELEASED",
-          orderId: existing.order.id,
+          reason: "ORDER_SHIPPED",
+          orderId,
           actorUserId: actor.id,
-          note: "Order cancelled",
+          note: "Order shipped",
         });
       }
 
-      return {
-        order: formatOrderResponse({ order: updatedOrder, items: existing.items }),
-        alreadyCancelled: false,
-      };
+      const order = await orderRepository.updateOrderStatus(tx, orderId, "SHIPPED", { shippedAt: new Date() });
+      return { order: formatOrderResponse({ order, items: existing.items }), alreadyShipped: false };
     });
+  }
+
+  /**
+   * Background job: cancel PENDING orders older than the TTL and release their
+   * stock, so unpaid orders cannot hoard inventory. One short transaction per
+   * order; each re-checks status under the row lock, so a concurrent payment
+   * or cancellation always wins cleanly and stock is released exactly once.
+   */
+  async expirePendingOrders(opts: { ttlMinutes: number; batchSize?: number }): Promise<number> {
+    const ids = await orderRepository.findExpiredPendingOrderIds(db, opts.ttlMinutes, opts.batchSize ?? 100);
+    let expired = 0;
+    for (const id of ids) {
+      const done = await db.transaction(async (tx) => {
+        const existing = await orderRepository.lockOrderWithItems(tx, id);
+        if (existing?.order.status !== "PENDING") return false;
+        await cancelLocked(tx, existing, null, `Expired: unpaid after ${opts.ttlMinutes} minutes`);
+        return true;
+      });
+      if (done) expired++;
+    }
+    return expired;
   }
 
   async getOrderById(actor: User, orderId: string): Promise<FormattedOrder> {
     const existing = await orderRepository.findOrderWithItems(db, orderId);
     if (!existing || (actor.role !== "ADMIN" && existing.order.userId !== actor.id)) {
-      throw new AppError({
-        statusCode: 404,
-        code: ErrorCodes.ORDER_NOT_FOUND,
-        message: `Order with ID '${orderId}' was not found`,
-      });
+      throw orderNotFound(orderId);
     }
-
     return formatOrderResponse(existing);
   }
 
   async listOrders(actor: User, opts: { limit: number; offset: number }): Promise<{ orders: FormattedOrder[]; total: number }> {
-    const result = await orderRepository.listOrdersByUser(db, actor.id, opts);
-    return {
-      orders: result.orders.map(formatOrderResponse),
-      total: result.total,
-    };
+    const result = await orderRepository.listOrders(db, { userId: actor.id, ...opts });
+    return { orders: result.orders.map(formatOrderResponse), total: result.total };
   }
+
+  /** Admin fulfillment view across all users. */
+  async listAllOrders(opts: {
+    status?: OrderStatus | undefined;
+    userId?: string | undefined;
+    limit: number;
+    offset: number;
+  }): Promise<{ orders: FormattedOrder[]; total: number }> {
+    const result = await orderRepository.listOrders(db, opts);
+    return { orders: result.orders.map(formatOrderResponse), total: result.total };
+  }
+
+  /** Lock the order row; non-admins only see their own orders (404 otherwise, never 403). */
+  private async lockVisibleOrder(tx: Tx, actor: User, orderId: string): Promise<OrderWithItems> {
+    const existing = await orderRepository.lockOrderWithItems(tx, orderId);
+    if (!existing || (actor.role !== "ADMIN" && existing.order.userId !== actor.id)) {
+      throw orderNotFound(orderId);
+    }
+    return existing;
+  }
+}
+
+function orderNotFound(orderId: string): AppError {
+  return new AppError({
+    statusCode: 404,
+    code: ErrorCodes.ORDER_NOT_FOUND,
+    message: `Order with ID '${orderId}' was not found`,
+  });
+}
+
+function assertTransition(from: OrderStatus, to: OrderStatus): void {
+  if (canTransitionOrderStatus(from, to)) return;
+  throw new AppError({
+    statusCode: 409,
+    code: ErrorCodes.INVALID_ORDER_STATE_TRANSITION,
+    message:
+      from === "SHIPPED" && to === "CANCELLED"
+        ? "Shipped orders cannot be cancelled directly; requires a return flow"
+        : `Cannot transition order from '${from}' to '${to}'`,
+    details: { from, to, allowedTargets: getAllowedOrderStatusTargets(from) },
+  });
+}
+
+function sortedProductIds(items: OrderItem[]): string[] {
+  return Array.from(new Set(items.map((i) => i.productId))).sort();
+}
+
+/** Cancel a locked PENDING/PAID order and release its reserved stock. */
+async function cancelLocked(tx: Tx, existing: OrderWithItems, actorUserId: string | null, note: string): Promise<Order> {
+  await orderRepository.lockInventoryRows(tx, sortedProductIds(existing.items));
+  for (const item of existing.items) {
+    await orderRepository.decrementReservedInventory(tx, item.productId, item.quantity);
+    await inventoryRepository.insertMovement(tx, {
+      productId: item.productId,
+      deltaOnHand: 0,
+      deltaReserved: -item.quantity,
+      reason: "ORDER_RELEASED",
+      orderId: existing.order.id,
+      actorUserId,
+      note,
+    });
+  }
+  return await orderRepository.updateOrderStatus(tx, existing.order.id, "CANCELLED", { cancelledAt: new Date() });
 }
 
 export const orderService = new OrderService();

@@ -19,7 +19,7 @@ describe("Cart Domain Logic Integration", () => {
       const res = await app.inject({
         method: "GET",
         url: "/cart",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
       });
 
       expect(res.statusCode).toBe(200);
@@ -43,7 +43,7 @@ describe("Cart Domain Logic Integration", () => {
         app.inject({
           method: "GET",
           url: "/cart",
-          headers: { authorization: `Bearer ${customer.id}` },
+          headers: { authorization: `Bearer ${customer.token}` },
         });
 
       const responses = await Promise.all(Array.from({ length: 5 }, getCart));
@@ -61,7 +61,7 @@ describe("Cart Domain Logic Integration", () => {
       await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 3 },
       });
 
@@ -69,7 +69,7 @@ describe("Cart Domain Logic Integration", () => {
       const res = await app.inject({
         method: "DELETE",
         url: "/cart",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
       });
 
       expect(res.statusCode).toBe(200);
@@ -92,7 +92,7 @@ describe("Cart Domain Logic Integration", () => {
       const res = await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 2 },
       });
 
@@ -120,7 +120,7 @@ describe("Cart Domain Logic Integration", () => {
       await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 2 },
       });
 
@@ -128,7 +128,7 @@ describe("Cart Domain Logic Integration", () => {
       const res = await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 3 },
       });
 
@@ -148,7 +148,7 @@ describe("Cart Domain Logic Integration", () => {
       const resDraft = await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: draft.id, quantity: 1 },
       });
       expect(resDraft.statusCode).toBe(404);
@@ -157,7 +157,7 @@ describe("Cart Domain Logic Integration", () => {
       const resArchived = await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: archived.id, quantity: 1 },
       });
       expect(resArchived.statusCode).toBe(404);
@@ -171,7 +171,7 @@ describe("Cart Domain Logic Integration", () => {
       const res = await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 4 },
       });
 
@@ -193,7 +193,7 @@ describe("Cart Domain Logic Integration", () => {
       const res0 = await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 0 },
       });
       expect(res0.statusCode).toBe(400);
@@ -202,7 +202,7 @@ describe("Cart Domain Logic Integration", () => {
       const resNeg = await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: -2 },
       });
       expect(resNeg.statusCode).toBe(400);
@@ -211,7 +211,7 @@ describe("Cart Domain Logic Integration", () => {
       const resMax = await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 100 },
       });
       expect(resMax.statusCode).toBe(400);
@@ -225,7 +225,7 @@ describe("Cart Domain Logic Integration", () => {
       await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 90 },
       });
 
@@ -233,7 +233,7 @@ describe("Cart Domain Logic Integration", () => {
       const res = await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 15 },
       });
 
@@ -251,7 +251,7 @@ describe("Cart Domain Logic Integration", () => {
       const summary = await app.inject({
         method: "GET",
         url: "/cart",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
       });
       expect(summary.json().items[0].quantity).toBe(90);
     });
@@ -264,7 +264,7 @@ describe("Cart Domain Logic Integration", () => {
         app.inject({
           method: "POST",
           url: "/cart/items",
-          headers: { authorization: `Bearer ${customer.id}` },
+          headers: { authorization: `Bearer ${customer.token}` },
           payload: { productId: product.id, quantity: 1 },
         });
 
@@ -274,7 +274,7 @@ describe("Cart Domain Logic Integration", () => {
       const cartRes = await app.inject({
         method: "GET",
         url: "/cart",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
       });
 
       const cart = cartRes.json();
@@ -297,14 +297,14 @@ describe("Cart Domain Logic Integration", () => {
       await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 2 },
       });
 
       const res = await app.inject({
         method: "PATCH",
         url: `/cart/items/${product.id}`,
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { quantity: 5 },
       });
 
@@ -321,14 +321,14 @@ describe("Cart Domain Logic Integration", () => {
       await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 2 },
       });
 
       const res = await app.inject({
         method: "PATCH",
         url: `/cart/items/${product.id}`,
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { quantity: 6 },
       });
 
@@ -343,7 +343,7 @@ describe("Cart Domain Logic Integration", () => {
       const res = await app.inject({
         method: "PATCH",
         url: `/cart/items/${otherProduct.id}`,
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { quantity: 3 },
       });
 
@@ -359,20 +359,20 @@ describe("Cart Domain Logic Integration", () => {
       await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product1.id, quantity: 1 },
       });
       await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product2.id, quantity: 2 },
       });
 
       const res = await app.inject({
         method: "DELETE",
         url: `/cart/items/${product1.id}`,
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
       });
 
       expect(res.statusCode).toBe(200);
@@ -388,7 +388,7 @@ describe("Cart Domain Logic Integration", () => {
       const res = await app.inject({
         method: "DELETE",
         url: `/cart/items/${product.id}`,
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
       });
 
       expect(res.statusCode).toBe(200);
@@ -405,7 +405,7 @@ describe("Cart Domain Logic Integration", () => {
       await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 3 },
       });
 
@@ -416,7 +416,7 @@ describe("Cart Domain Logic Integration", () => {
       const res = await app.inject({
         method: "GET",
         url: "/cart",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
       });
 
       expect(res.statusCode).toBe(200);
@@ -435,13 +435,13 @@ describe("Cart Domain Logic Integration", () => {
       await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: productA.id, quantity: 1 },
       });
       await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: productB.id, quantity: 1 },
       });
 
@@ -451,7 +451,7 @@ describe("Cart Domain Logic Integration", () => {
       const res = await app.inject({
         method: "GET",
         url: "/cart",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
       });
 
       expect(res.statusCode).toBe(200);
@@ -481,7 +481,7 @@ describe("Cart Domain Logic Integration", () => {
       await app.inject({
         method: "POST",
         url: "/cart/items",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
         payload: { productId: product.id, quantity: 5 },
       });
 
@@ -491,7 +491,7 @@ describe("Cart Domain Logic Integration", () => {
       const resPartial = await app.inject({
         method: "GET",
         url: "/cart",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
       });
       const cartPartial = resPartial.json();
       expect(cartPartial.items[0]).toMatchObject({
@@ -507,7 +507,7 @@ describe("Cart Domain Logic Integration", () => {
       const resZero = await app.inject({
         method: "GET",
         url: "/cart",
-        headers: { authorization: `Bearer ${customer.id}` },
+        headers: { authorization: `Bearer ${customer.token}` },
       });
       const cartZero = resZero.json();
       expect(cartZero.items[0]).toMatchObject({

@@ -13,7 +13,8 @@ cp .env.example .env
 docker compose up -d          # PostgreSQL 17 on localhost:5433 (creates ecommerce_dev + ecommerce_test)
 npm install
 npm run db:migrate            # Apply migrations to development database
-npm test                      # Migrates test database and runs all 98 integration tests
+ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='a-long-passphrase' npm run seed:admin
+npm test                      # Migrates test database and runs all 140 integration tests
 ```
 
 ---
@@ -22,11 +23,12 @@ npm test                      # Migrates test database and runs all 98 integrati
 
 | Script | Purpose |
 |---|---|
-| `npm test` | Run all 98 integration and unit tests against real test DB |
+| `npm test` | Run all 140 integration and unit tests against real test DB |
 | `npm run typecheck` | Strict TypeScript check (`tsc --noEmit`) |
 | `npm run db:generate` | Generate reviewable SQL migrations from Drizzle schemas |
 | `npm run db:migrate` | Apply migrations to `DATABASE_URL` |
 | `npm run db:migrate:test` | Apply migrations to `TEST_DATABASE_URL` |
+| `npm run seed:admin` | Create an `ADMIN` from `ADMIN_EMAIL` / `ADMIN_PASSWORD` env vars (admins cannot self-register) |
 | `npm run build` | Compile TypeScript to `dist/` |
 
 ---
@@ -46,10 +48,25 @@ npm test                      # Migrates test database and runs all 98 integrati
 - **Database-Level Invariant (The Absolute Safety Net):** `CHECK (quantity_reserved <= quantity_on_hand)` prevents negative available stock even under application bypass.
 - **Per-User Idempotency Keys:** Network retries for checkout or inventory adjustments replay committed results safely without double-charging or double-deducting stock.
 - **Double-Restocking Defense:** Order cancellation uses atomic compare-and-set (`UPDATE ... WHERE status IN ('PENDING', 'PAID')`) coupled with stock restoration inside a single transaction.
+- **Cart Locking:** Checkout and every cart write lock the cart row first (lock order: cart → inventory), so an order always matches the cart exactly and no write can land in a converted cart.
+
+### 4. Authentication
+- **Opaque session tokens:** 256-bit random bearer tokens; only their SHA-256 hash is stored, so a database leak yields no usable credentials. Absolute expiry (`SESSION_TTL_HOURS`, default 7 days); logout revokes the current session.
+- **Password storage:** salted `scrypt` (N=2^17, r=8, p=1) via Node's built-in crypto, with parameters encoded per hash for future upgrades.
+- **No account enumeration:** unknown email and wrong password return byte-identical `401 INVALID_CREDENTIALS` responses with matched timing.
+- **No privilege escalation:** registration always creates a `CUSTOMER`; admins are created only by `npm run seed:admin`. Suspension takes effect on the next request.
 
 ---
 
 ## API Endpoints
+
+Authenticated endpoints expect `Authorization: Bearer <token>` from `POST /auth/login`.
+
+### Auth
+- `POST /auth/register` — Create a customer account (`email`, `password` of 12–128 chars)
+- `POST /auth/login` — Exchange credentials for a session token (`token`, `expiresAt`, `user`)
+- `POST /auth/logout` — Revoke the current session (204)
+- `GET /auth/me` — Current user profile
 
 ### Products & Inventory (Admin)
 - `POST /admin/products` — Create a product (`DRAFT`) with initial inventory
@@ -62,7 +79,7 @@ npm test                      # Migrates test database and runs all 98 integrati
 - `GET /admin/products/:id/inventory/movements` — Inspect append-only audit ledger
 
 ### Catalog (Public)
-- `GET /products` — List active products with available stock
+- `GET /products` — List active products with availability (`availableQuantity`, `inStock` only)
 - `GET /products/:id` — View active product details (returns 404 for draft/archived)
 
 ### Cart (Customer)

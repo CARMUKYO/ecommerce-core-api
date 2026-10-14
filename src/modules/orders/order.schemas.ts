@@ -10,3 +10,8 @@ export const ListOrdersQuerySchema = z.object({
 });
 
 export type ListOrdersQuery = z.infer<typeof ListOrdersQuerySchema>;
+
+export const AdminListOrdersQuerySchema = ListOrdersQuerySchema.extend({
+  status: z.enum(["PENDING", "PAID", "SHIPPED", "CANCELLED"]).optional(),
+  userId: z.string().uuid("Invalid user ID format; expected UUID").optional(),
+});

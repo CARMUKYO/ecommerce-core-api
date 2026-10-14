@@ -7,7 +7,9 @@ services:
       POSTGRES_PASSWORD: ecommerce
       POSTGRES_DB: ecommerce_dev
     ports:
-      - "5433:5432"
+      # Loopback only: Docker's published ports bypass host firewalls (ufw),
+      # and these dev credentials must never be reachable from the network.
+      - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/init:/docker-entrypoint-initdb.d:ro

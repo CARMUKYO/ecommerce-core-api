@@ -1,21 +1,39 @@
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
-import { AppError, ErrorCodes, type ErrorEnvelope } from "./errors.js";
+import { findPgError, PgErrorCodes } from "../db/pg-errors.js";
+import { AppError, ErrorCodes, type ErrorCode, type ErrorEnvelope } from "./errors.js";
 
-interface PgErrorLike {
-  code?: string;
-  constraint?: string;
-  cause?: unknown;
+const MALFORMED_BODY_CODES = new Set([
+  "FST_ERR_CTP_INVALID_JSON_BODY",
+  "FST_ERR_CTP_EMPTY_JSON_BODY",
+  "FST_ERR_CTP_INVALID_CONTENT_LENGTH",
+]);
+
+function mapFastifyClientError(
+  error: FastifyError | Error,
+): { statusCode: number; code: ErrorCode; message: string } | undefined {
+  const { statusCode, code } = error as Partial<FastifyError>;
+  if (typeof statusCode !== "number" || statusCode < 400 || statusCode >= 500) return undefined;
+
+  if (code && MALFORMED_BODY_CODES.has(code)) {
+    return { statusCode: 400, code: ErrorCodes.MALFORMED_REQUEST_BODY, message: "Request body is malformed or empty" };
+  }
+  if (code === "FST_ERR_CTP_BODY_TOO_LARGE") {
+    return { statusCode: 413, code: ErrorCodes.PAYLOAD_TOO_LARGE, message: "Request body is too large" };
+  }
+  if (code === "FST_ERR_CTP_INVALID_MEDIA_TYPE") {
+    return { statusCode: 415, code: ErrorCodes.UNSUPPORTED_MEDIA_TYPE, message: "Unsupported content type" };
+  }
+  return { statusCode, code: ErrorCodes.BAD_REQUEST, message: "The request could not be processed" };
 }
 
-function findPgError(err: unknown): PgErrorLike | undefined {
-  let current: unknown = err;
-  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
-    const e = current as PgErrorLike;
-    if (typeof e.code === "string" && /^[0-9A-Z]{5}$/.test(e.code)) return e;
-    current = e.cause;
-  }
-  return undefined;
+export function registerNotFoundHandler(app: FastifyInstance): void {
+  app.setNotFoundHandler((_request: FastifyRequest, reply: FastifyReply) => {
+    const envelope: ErrorEnvelope = {
+      error: { code: ErrorCodes.ROUTE_NOT_FOUND, message: "The requested route does not exist" },
+    };
+    return reply.status(404).send(envelope);
+  });
 }
 
 export function registerErrorHandler(app: FastifyInstance): void {
@@ -60,10 +78,21 @@ export function registerErrorHandler(app: FastifyInstance): void {
       return reply.status(400).send(envelope);
     }
 
+    // Fastify's own client errors (body parsing, content type, size limits).
+    // Fixed messages only: parser output can echo fragments of the request.
+    const clientError = mapFastifyClientError(error);
+    if (clientError) {
+      request.log.info({ err: error }, "client error");
+      const envelope: ErrorEnvelope = {
+        error: { code: clientError.code, message: clientError.message },
+      };
+      return reply.status(clientError.statusCode).send(envelope);
+    }
+
     // 3. PostgreSQL errors (defensive safety net)
     const pgErr = findPgError(error);
     if (pgErr?.code) {
-      if (pgErr.code === "23505" && pgErr.constraint === "products_sku_key") {
+      if (pgErr.code === PgErrorCodes.UNIQUE_VIOLATION && pgErr.constraint === "products_sku_key") {
         const envelope: ErrorEnvelope = {
           error: {
             code: ErrorCodes.SKU_ALREADY_EXISTS,
@@ -73,7 +102,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
         return reply.status(409).send(envelope);
       }
 
-      if (pgErr.code === "23514" && pgErr.constraint === "inventory_reserved_lte_on_hand_chk") {
+      if (pgErr.code === PgErrorCodes.CHECK_VIOLATION && pgErr.constraint === "inventory_reserved_lte_on_hand_chk") {
         const envelope: ErrorEnvelope = {
           error: {
             code: ErrorCodes.STOCK_BELOW_RESERVED,
@@ -83,7 +112,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
         return reply.status(409).send(envelope);
       }
 
-      if (pgErr.code === "23514" && pgErr.constraint === "inventory_on_hand_non_negative_chk") {
+      if (pgErr.code === PgErrorCodes.CHECK_VIOLATION && pgErr.constraint === "inventory_on_hand_non_negative_chk") {
         const envelope: ErrorEnvelope = {
           error: {
             code: ErrorCodes.NEGATIVE_STOCK,
@@ -93,7 +122,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
         return reply.status(409).send(envelope);
       }
 
-      if (pgErr.code === "22003") {
+      if (pgErr.code === PgErrorCodes.NUMERIC_OUT_OF_RANGE) {
         const envelope: ErrorEnvelope = {
           error: {
             code: ErrorCodes.STOCK_LIMIT_EXCEEDED,

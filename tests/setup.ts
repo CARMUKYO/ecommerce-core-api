@@ -9,6 +9,7 @@ const TABLES = [
   "carts",
   "inventory",
   "products",
+  "sessions",
   "users",
 ];
 
